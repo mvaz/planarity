@@ -52,7 +52,7 @@ setup(
     cmdclass = {'build_ext': build_ext},
     ext_modules = [Extension("planarity.planarity",
                              sourcefiles,
-                             include_dirs=['planarity/src/'],
+                             include_dirs=['planarity/src/', '/usr/include/malloc/'],
                              )],
     version          = '0.3.1',
     url = 'https://github.com/hagberg/planarity/',
