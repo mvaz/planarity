@@ -464,3 +464,508 @@ char saveEdgeListFormat;
      FlushConsole(stdout);
      return Result;
 }
+
+
+
+/****************************************************************************
+ SpecificGraph()
+ ****************************************************************************/
+
+int SpecificGraph(char command, char *infileName, char *outfileName, char *outfile2Name)
+{
+graphP theGraph, origGraph;
+platform_time start, end;
+int Result;
+
+    // Get the filename of the graph to test
+    if ((infileName = ConstructInputFilename(infileName)) == NULL)
+      return NOTOK;
+
+    // Create the graph and, if needed, attach the correct algorithm to it
+    theGraph = gp_New();
+
+  switch (command)
+  {
+    case 'd' : gp_AttachDrawPlanar(theGraph); break;
+    case '2' : gp_AttachK23Search(theGraph); break;
+    case '3' : gp_AttachK33Search(theGraph); break;
+    case '4' : gp_AttachK4Search(theGraph); break;
+    case 'c' : gp_AttachColorVertices(theGraph); break;
+  }
+
+    // Read the graph into memory
+  Result = gp_Read(theGraph, infileName);
+  if (Result == NONEMBEDDABLE)
+  {
+    Message("The graph contains too many edges.\n");
+    // Some of the algorithms will still run correctly with some edges removed.
+    if (strchr("pdo234", command))
+    {
+      Message("Some edges were removed, but the algorithm will still run correctly.\n");
+      Result = OK;
+    }
+  }
+
+  // If there was an unrecoverable error, report it
+  if (Result != OK)
+    ErrorMessage("Failed to read graph\n");
+
+  // Otherwise, call the correct algorithm on it
+  else
+  {
+    // Copy the graph for integrity checking
+        origGraph = gp_DupGraph(theGraph);
+
+        // Run the algorithm
+        if (strchr("pdo234", command))
+        {
+        int embedFlags = GetEmbedFlags(command);
+          platform_GetTime(start);
+
+//          gp_CreateDFSTree(theGraph);
+//          gp_SortVertices(theGraph);
+//      gp_Write(theGraph, "debug.before.txt", WRITE_DEBUGINFO);
+//          gp_SortVertices(theGraph);
+
+      Result = gp_Embed(theGraph, embedFlags);
+          platform_GetTime(end);
+          Result = gp_TestEmbedResultIntegrity(theGraph, origGraph, Result);
+        }
+        else
+        {
+          platform_GetTime(start);
+          if (command == 'c')
+          {
+          if ((Result = gp_ColorVertices(theGraph)) == OK)
+             Result = gp_ColorVerticesIntegrityCheck(theGraph, origGraph);
+          }
+          else
+          Result = NOTOK;
+            platform_GetTime(end);
+        }
+
+        // Write what the algorithm determined and how long it took
+        WriteAlgorithmResults(theGraph, Result, command, start, end, infileName);
+
+        // Free the graph obtained for integrity checking.
+        gp_Free(&origGraph);
+  }
+
+  // Report an error, if there was one, free the graph, and return
+  if (Result != OK && Result != NONEMBEDDABLE)
+  {
+    ErrorMessage("AN ERROR HAS BEEN DETECTED\n");
+    Result = NOTOK;
+//    gp_Write(theGraph, "debug.after.txt", WRITE_DEBUGINFO);
+  }
+
+  // Provide the output file(s)
+  else
+  {
+        // Restore the vertex ordering of the original graph (undo DFS numbering)
+        if (strchr("pdo234", command))
+            gp_SortVertices(theGraph);
+
+        // Determine the name of the primary output file
+        outfileName = ConstructPrimaryOutputFilename(infileName, outfileName, command);
+
+        // For some algorithms, the primary output file is not always written
+        if ((strchr("pdo", command) && Result == NONEMBEDDABLE) ||
+          (strchr("234", command) && Result == OK))
+          ;
+
+        // Write the primary output file, if appropriate to do so
+        else
+      gp_Write(theGraph, outfileName, WRITE_ADJLIST);
+
+        // NOW WE WANT TO WRITE THE SECONDARY OUTPUT FILE
+
+    // When called from the menu system, we want to write the planar or outerplanar
+    // obstruction, if one exists. For planar graph drawing, we want the character
+        // art rendition.  An empty but non-NULL string is passed to indicate the necessity
+        // of selecting a default name for the second output file.
+    if (outfile2Name != NULL)
+    {
+      if ((command == 'p' || command == 'o') && Result == NONEMBEDDABLE)
+      {
+        // By default, use the same name as the primary output filename
+        if (strlen(outfile2Name) == 0)
+            outfile2Name = outfileName;
+        gp_Write(theGraph, outfile2Name, WRITE_ADJLIST);
+      }
+      else if (command == 'd' && Result == OK)
+      {
+        // By default, add ".render.txt" to the primary output filename
+        if (strlen(outfile2Name) == 0)
+              strcat((outfile2Name = outfileName), ".render.txt");
+        gp_DrawPlanar_RenderToFile(theGraph, outfile2Name);
+      }
+    }
+  }
+
+  // Free the graph
+  gp_Free(&theGraph);
+
+  // Flush any remaining message content to the user, and return the result
+    FlushConsole(stdout);
+  return Result;
+}
+
+/****************************************************************************
+ WriteAlgorithmResults()
+ ****************************************************************************/
+
+void WriteAlgorithmResults(graphP theGraph, int Result, char command, platform_time start, platform_time end, char *infileName)
+{
+  if (infileName)
+     sprintf(Line, "The graph '%s' ", infileName);
+  else sprintf(Line, "The graph ");
+  Message(Line);
+
+  switch (command)
+  {
+    case 'p' : sprintf(Line, "is%s planar.\n", Result==OK ? "" : " not"); break;
+    case 'd' : sprintf(Line, "is%s planar.\n", Result==OK ? "" : " not"); break;
+    case 'o' : sprintf(Line, "is%s outerplanar.\n", Result==OK ? "" : " not"); break;
+    case '2' : sprintf(Line, "has %s subgraph homeomorphic to K_{2,3}.\n", Result==OK ? "no" : "a"); break;
+    case '3' : sprintf(Line, "has %s subgraph homeomorphic to K_{3,3}.\n", Result==OK ? "no" : "a"); break;
+    case '4' : sprintf(Line, "has %s subgraph homeomorphic to K_4.\n", Result==OK ? "no" : "a"); break;
+    case 'c' : sprintf(Line, "has been %d-colored.\n", gp_GetNumColorsUsed(theGraph)); break;
+    default  : sprintf(Line, "nas not been processed due to unrecognized command.\n"); break;
+  }
+  Message(Line);
+
+  sprintf(Line, "Algorithm '%s' executed in %.3lf seconds.\n",
+      GetAlgorithmName(command), platform_GetDuration(start,end));
+  Message(Line);
+}
+
+
+
+/****************************************************************************
+ Configuration
+ ****************************************************************************/
+
+char Mode='r',
+     OrigOut='n',
+     EmbeddableOut='n',
+     ObstructedOut='n',
+     AdjListsForEmbeddingsOut='n',
+     quietMode='n';
+
+void Reconfigure()
+{
+     fflush(stdin);
+
+     Prompt("\nDo you want to \n"
+        "  Randomly generate graphs (r),\n"
+        "  Specify a graph (s),\n"
+        "  Randomly generate a maximal planar graph (m), or\n"
+        "  Randomly generate a non-planar graph (n)?");
+     scanf(" %c", &Mode);
+
+     Mode = tolower(Mode);
+     if (!strchr("rsmn", Mode))
+       Mode = 's';
+
+     if (Mode == 'r')
+     {
+        Message("\nNOTE: The directories for the graphs you want must exist.\n\n");
+
+        Prompt("Do you want original graphs in directory 'random' (last 10 max)?");
+        scanf(" %c", &OrigOut);
+
+        Prompt("Do you want adj. matrix of embeddable graphs in directory 'embedded' (last 10 max))?");
+        scanf(" %c", &EmbeddableOut);
+
+        Prompt("Do you want adj. matrix of obstructed graphs in directory 'obstructed' (last 10 max)?");
+        scanf(" %c", &ObstructedOut);
+
+        Prompt("Do you want adjacency list format of embeddings in directory 'adjlist' (last 10 max)?");
+        scanf(" %c", &AdjListsForEmbeddingsOut);
+     }
+
+     FlushConsole(stdout);
+}
+
+/****************************************************************************
+ MESSAGE - prints a string, but when debugging adds \n and flushes stdout
+ ****************************************************************************/
+
+#define MAXLINE 1024
+char Line[MAXLINE];
+
+void Message(char *message)
+{
+  if (quietMode == 'n')
+  {
+      fprintf(stdout, "%s", message);
+
+#ifdef DEBUG
+//      fprintf(stdout, "\n");
+      fflush(stdout);
+#endif
+  }
+}
+
+void ErrorMessage(char *message)
+{
+  if (quietMode == 'n')
+  {
+    fprintf(stderr, "%s", message);
+
+#ifdef DEBUG
+    fprintf(stderr, "\n");
+    fflush(stderr);
+#endif
+  }
+}
+
+void FlushConsole(FILE *f)
+{
+#ifdef DEBUG
+      // Certain debuggers only flush completed lines of output to the console
+      fprintf(f, "\n");
+#endif
+      fflush(f);
+}
+
+void Prompt(char *message)
+{
+  Message(message);
+  FlushConsole(stdout);
+}
+
+/****************************************************************************
+ ****************************************************************************/
+
+void SaveAsciiGraph(graphP theGraph, char *filename)
+{
+  int  e, EsizeOccupied;
+  FILE *outfile = fopen(filename, "wt");
+  fprintf(outfile, "%s\n", filename);
+
+  EsizeOccupied = gp_EdgeInUseIndexBound(theGraph);
+  for (e = gp_GetFirstEdge(theGraph); e < EsizeOccupied; e+=2)
+  {
+    // Skip the edge holes
+    if (gp_EdgeInUse(theGraph, e))
+    {
+      fprintf(outfile, "%d %d\n", gp_GetNeighbor(theGraph, e)+1, gp_GetNeighbor(theGraph, e+1)+1);
+    }
+  }
+
+  fprintf(outfile, "0 0\n");
+
+  fclose(outfile);
+}
+
+/****************************************************************************
+ ****************************************************************************/
+
+int  FilesEqual(char *file1Name, char *file2Name)
+{
+  FILE *infile1 = NULL, *infile2 = NULL;
+  int Result = TRUE;
+
+  infile1 = fopen(file1Name, "r");
+  infile2 = fopen(file2Name, "r");
+
+  if (infile1 == NULL || infile2 == NULL)
+    Result = FALSE;
+  else
+  {
+    int c1=0, c2=0;
+
+    // Read the first file to the end
+    while ((c1 = fgetc(infile1)) != EOF)
+    {
+      // If we got a char from the first file, but not from the second
+      // then the second file is shorter, so files are not equal
+      if ((c2 = fgetc(infile2)) == EOF)
+      {
+        Result = FALSE;
+        break;
+      }
+
+      // If we got a char from second file, but not equal to char from
+      // first file, then files are not equal
+      if (c1 != c2)
+      {
+        Result = FALSE;
+        break;
+      }
+    }
+
+    // If we got to the end of the first file without breaking the loop...
+    if (c1 == EOF)
+    {
+      // Then attempt to read from the second file to ensure it also ends.
+      if (fgetc(infile2) != EOF)
+        Result = FALSE;
+    }
+  }
+
+  if (infile1 != NULL) fclose(infile1);
+  if (infile2 != NULL) fclose(infile2);
+  return Result;
+}
+
+/****************************************************************************
+ ****************************************************************************/
+
+int GetEmbedFlags(char command)
+{
+  int embedFlags = 0;
+
+  switch (command)
+  {
+    case 'o' : embedFlags = EMBEDFLAGS_OUTERPLANAR; break;
+    case 'p' : embedFlags = EMBEDFLAGS_PLANAR; break;
+    case 'd' : embedFlags = EMBEDFLAGS_DRAWPLANAR; break;
+    case '2' : embedFlags = EMBEDFLAGS_SEARCHFORK23; break;
+    case '3' : embedFlags = EMBEDFLAGS_SEARCHFORK33; break;
+    case '4' : embedFlags = EMBEDFLAGS_SEARCHFORK4; break;
+  }
+
+  return embedFlags;
+}
+
+/****************************************************************************
+ ****************************************************************************/
+
+char *GetAlgorithmName(char command)
+{
+  char *algorithmName = "UnsupportedAlgorithm";
+
+  switch (command)
+  {
+    case 'p' : algorithmName = "PlanarEmbed"; break;
+    case 'd' : algorithmName = DRAWPLANAR_NAME; break;
+    case 'o' : algorithmName = "OuterplanarEmbed"; break;
+    case '2' : algorithmName = K23SEARCH_NAME; break;
+    case '3' : algorithmName = K33SEARCH_NAME; break;
+    case '4' : algorithmName = K4SEARCH_NAME; break;
+    case 'c' : algorithmName = COLORVERTICES_NAME; break;
+  }
+
+  return algorithmName;
+}
+
+/****************************************************************************
+ ****************************************************************************/
+
+void AttachAlgorithm(graphP theGraph, char command)
+{
+  switch (command)
+  {
+    case 'd' : gp_AttachDrawPlanar(theGraph); break;
+    case '2' : gp_AttachK23Search(theGraph); break;
+    case '3' : gp_AttachK33Search(theGraph); break;
+    case '4' : gp_AttachK4Search(theGraph); break;
+    case 'c' : gp_AttachColorVertices(theGraph); break;
+  }
+}
+
+/****************************************************************************
+ A string used to construct input and output filenames.
+
+ The SUFFIXMAXLENGTH is 32 to accommodate ".out.txt" + ".render.txt" + ".test.txt"
+ ****************************************************************************/
+
+#define FILENAMEMAXLENGTH 128
+#define ALGORITHMNAMEMAXLENGTH 32
+#define SUFFIXMAXLENGTH 32
+
+char theFileName[FILENAMEMAXLENGTH+1+ALGORITHMNAMEMAXLENGTH+1+SUFFIXMAXLENGTH+1];
+
+/****************************************************************************
+ ConstructInputFilename()
+ Returns a string not owned by the caller (do not free string).
+ String contains infileName content if infileName is non-NULL.
+ If infileName is NULL, then the user is asked to supply a name.
+ Returns NULL on error, or a non-NULL string on success.
+ ****************************************************************************/
+
+char *ConstructInputFilename(char *infileName)
+{
+  if (infileName == NULL)
+  {
+    Prompt("Enter graph file name: ");
+    fflush(stdin);
+    scanf(" %s", theFileName);
+
+    if (!strchr(theFileName, '.'))
+      strcat(theFileName, ".txt");
+  }
+  else
+  {
+    if (strlen(infileName) > FILENAMEMAXLENGTH)
+    {
+      ErrorMessage("Filename is too long");
+      return NULL;
+    }
+    strcpy(theFileName, infileName);
+  }
+
+  return theFileName;
+}
+
+/****************************************************************************
+ ConstructPrimaryOutputFilename()
+ Returns a string not owned by the caller (do not free string).
+ Reuses the same memory space as ConstructinputFilename().
+ If outfileName is non-NULL, then the result string contains its content.
+ If outfileName is NULL, then the infileName and the command's algorithm name
+ are used to construct a string.
+ Returns non-NULL string
+ ****************************************************************************/
+
+char *ConstructPrimaryOutputFilename(char *infileName, char *outfileName, char command)
+{
+  char *algorithmName = GetAlgorithmName(command);
+
+  if (outfileName == NULL)
+  {
+    // The output filename is based on the input filename
+    if (theFileName != infileName)
+        strcpy(theFileName, infileName);
+
+    // If the primary output filename has not been given, then we use
+    // the input filename + the algorithm name + a simple suffix
+    if (strlen(algorithmName) <= ALGORITHMNAMEMAXLENGTH)
+    {
+      strcat(theFileName, ".");
+      strcat(theFileName, algorithmName);
+    }
+    else
+      ErrorMessage("Algorithm Name is too long, so it will not be used in output filename.");
+
+      strcat(theFileName, ".out.txt");
+  }
+  else
+  {
+    if (strlen(outfileName) > FILENAMEMAXLENGTH)
+    {
+      // The output filename is based on the input filename
+      if (theFileName != infileName)
+          strcpy(theFileName, infileName);
+
+        if (strlen(algorithmName) <= ALGORITHMNAMEMAXLENGTH)
+        {
+          strcat(theFileName, ".");
+          strcat(theFileName, algorithmName);
+        }
+          strcat(theFileName, ".out.txt");
+      sprintf(Line, "Outfile filename is too long. Result placed in %s", theFileName);
+      ErrorMessage(Line);
+    }
+    else
+    {
+      if (theFileName != outfileName)
+          strcpy(theFileName, outfileName);
+    }
+  }
+
+  return theFileName;
+}
